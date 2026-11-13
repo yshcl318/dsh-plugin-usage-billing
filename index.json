@@ -37,12 +37,25 @@
       },
       "versions": [
         {
+          "version": "1.4.1",
+          "publishTimestamp": 1794576899,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/yshcl318/dsh-plugin-usage-billing",
+            "commit": "fa64e51607dccd64af584092026d8e8ce3247235",
+            "path": "bundle/dsh-plugin-usage-billing"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.2 <0.3.0-0"
+          }
+        },
+        {
           "version": "1.4.0",
           "publishTimestamp": 1794576099,
           "source": {
             "type": "git",
             "url": "https://github.com/yshcl318/dsh-plugin-usage-billing",
-            "commit": "0c419e9e564192270fcee20a1a216d66da09dc69",
+            "commit": "941357c6f20398061e89cba614e18aae751bd1e1",
             "path": "bundle/dsh-plugin-usage-billing"
           },
           "engines": {
