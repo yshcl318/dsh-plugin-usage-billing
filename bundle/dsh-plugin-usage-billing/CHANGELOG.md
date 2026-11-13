@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.4.1
+
+Documentation and test hardening; runtime behaviour is unchanged from 1.4.0.
+
+- Added `tests/domain-compat.test.mjs`: it opens a version-2 `usage_billing`
+  domain that already contains `balances` rows through the real
+  `DomainFacility` with the 1.3.x seven-table reader, so the
+  backward-compatibility decision is covered by a test instead of an
+  assumption. It also checks that a corrupt wallet row is backed up and
+  skipped without failing the ledger.
+- `docs/DETAIL.md` documents how multiple Clients schedule wallet polls and how
+  the Host keeps one cached observation with a TTL and a single in-flight
+  request, so several surfaces share one platform query.
+- The workspace test toolchain adds `@deepseek-ai/dsh-storage` and
+  `@deepseek-ai/dsh-storage-domain`; neither is a bundle dependency.
+
 ## 1.4.0
 
 Actual DeepSeek account balance, with live refresh.
