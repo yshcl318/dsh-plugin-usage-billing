@@ -73,6 +73,12 @@ const view = internals.budgetView({ month: { spentCny: 5, monthlyCny: 100, notic
 assert.equal(view.includeSubagents, true);
 assert.equal(view.notice, 50);
 assert.equal(view.monthKey, '2026-11');
+// Wallet presentation helpers.
+assert.equal(internals.signedMoney(-0.2), '−¥0.20');
+assert.equal(internals.signedMoney(0), '¥0.00');
+assert.equal(internals.balanceIsLive({ status: 'ready', totalCny: 11.78 }), true);
+assert.equal(internals.balanceIsLive({ status: 'signedOut', totalCny: null }), false);
+assert.equal(typeof internals.balanceHintView({ status: 'signedOut' }).text, 'string');
 assert.deepEqual(plugin.inject, ['slots']);
 
 const registrations = [];

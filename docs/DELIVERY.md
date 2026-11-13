@@ -1,13 +1,13 @@
-# 用量计费 bundle — 交付与复核修复报告（v1.3.1）
+# 用量计费 bundle — 交付与复核修复报告（v1.4.0）
 
 交付物与安装状态：
 
 | 项 | 值 |
 |---|---|
 | 工作区源码 | `D:\deepseek-harness\bundle\dsh-plugin-usage-billing` |
-| 可安装包 | `dist/dsh-plugin-usage-billing-1.3.1.zip`（同目录 `dist/dsh-plugin-usage-billing/` 可直接安装） |
+| 可安装包 | `dist/dsh-plugin-usage-billing-1.4.0.zip`（同目录 `dist/dsh-plugin-usage-billing/` 可直接安装） |
 | profile 安装位置 | `C:\Users\Hp\.dsh\bundles\dsh-plugin-usage-billing`（profile 依赖为 `link:C:/Users/Hp/.dsh/bundles/dsh-plugin-usage-billing`，不再指向工作区） |
-| 包名/版本 | `@yshcl318/dsh-plugin-usage-billing@1.3.1`，`private: true`，`engines.dsh: >=0.2.2-rc.2 <0.3.0-0` |
+| 包名/版本 | `@yshcl318/dsh-plugin-usage-billing@1.4.0`，`private: true`，`engines.dsh: >=0.2.2-rc.2 <0.3.0-0` |
 | 状态 | `desktop` profile 中启用、运行中；Host 行 `usage-billing` 已激活 |
 
 安装：`plugin_manager install_bundle target = C:\Users\Hp\.dsh\bundles\dsh-plugin-usage-billing`
@@ -180,6 +180,43 @@ node tests/client.test.mjs    → 5 surfaces, 5 degraded surfaces, 17 remote met
 | 5 | `private: true` 无发布配置 | ⚠️ 保持记录 | 仅在发布到插件索引时需要补 publish 配置与版本策略；当前交付为本地 bundle。 |
 
 运行时 bundle 代码自 1.3.0 未变，本版只调整测试脚本、测试写法与版本记录。
+
+
+---
+
+## 十、实际余额实时变动（v1.4.0）
+
+新增 **实际余额**：读取当前登录 DeepSeek 账号的真实余额，并在插件内实时刷新、记录变动、对照本地估算。
+
+| 项 | 实现与实测 |
+|---|---|
+| 数据来源 | 平台 `deepseekAccount` 服务（`getBalance` / `getState`），不读取、不存储、不上传任何 API Key；无账号服务或未登录时显示对应状态而不是假数字。 |
+| 展示位置 | 概览顶部余额条（实时圆点 + 刷新按钮）、弹层、设置 → 计费 → **钱包** 页、侧栏入口 tooltip、输入框胶囊 tooltip 与行内「余额 ¥x」、主面板「钱包」页签。 |
+| 实时刷新 | 客户端 25s 心跳拉取；Host 按偏好缓存 15/30/60/120s（默认 30s）；每次手动刷新立即查询；本地会话每产生一次用量后 8s 触发一次检查。 |
+| 变动记录 | 新 domain 表 `balances` 持久化采样（同值 10 分钟内只留心跳，最多 1200 条）；「较上次」「今日余额减少*」「变动历史」重启后保留。 |
+| 估算对照 | 今日「用量估算」（本地账本）vs「余额减少」（实际观测），并显示差值；* 标注以当天第一次观测为锚点（非午夜）。 |
+| 设置 | 钱包页：显示开关、刷新间隔 15/30/60/120s、充值/用量外链、最近 40 条采样历史；关闭显示后退化为不请求。 |
+| 实测 | 登录账号下显示 **¥10.68**（账号页同刻 ¥10.70，差值为查询间隔内的真实消耗），实时标记、较上次 −¥0.03、今日余额减少 ¥0.30、今日用量估算 ¥15.00、9 条采样历史；侧栏 tooltip「32% · 余额 ¥10.68」；胶囊行内「会话 ¥9.33 余额 ¥10.68」；无 `[usage-billing]` 错误。 |
+| 测试 | host **19/19**（新增钱包解析、观测变动、账号服务 mock、未登录/无服务降级、balances 表校验）；client 19 方法接线；jsdom UI 测试新增余额卡断言；`tsc` 0 错误。 |
+
+截图：`verify/v15-panel.png`（概览余额条）、`verify/v15-wallet.png`（钱包页）、`verify/v15-capsule.png`（胶囊行内余额）。
+
+
+---
+
+## 十一、余额功能复核修复（1.4.0 发布前）
+
+| # | 复核问题 | 结论与处理 |
+|---|---|---|
+| 1 | 刷新间隔选项与实际不符（Host 固定 45s） | ✅ 已修：删除 Host 固定定时器；客户端新增**专用钱包调度器**按偏好间隔运行（15/30/60/120s），修改间隔立即重排，手动刷新仍即时。实测选 15s 后连续两次请求间隔 **15.048s / 15.012s**，钱包页文案同步为「每 15 秒自动刷新」，随后恢复默认 30s。 |
+| 2 | `getState` 疑似不存在 | ❌ 不是 bug：`deepseekAccount` 的 Host 服务契约包含 `getState(): Promise<AccountView>`，`AccountView.links` 即用量/充值链接；Host 单测断言了 `links.topUpUrl`，真实界面也显示「充值 / 查询用量」链接。 |
+| 3 | `accountClientMeta().version` 硬编码 | ✅ 已修：从本包 `package.json` 读取（`createRequire`，带缓存与兜底），单测断言发送的 version 与 manifest 一致。 |
+| 4 | 充值当天「实际扣费」失真 | ✅ 已修：改为**当天观测到的余额下降累加**（充值导致的上涨不抵消已发生的消耗），并返回 `todayTopUp` 标记，界面提示「今日观察到充值；实扣按余额下降累计」。少于 2 个样本时仍显示 `—`。新增 12→10→20→18 的单元测试：实扣 = 4、`todayTopUp=true`。 |
+| 5 | 空闲时也在轮询 | ✅ 已修：Host 无任何钱包后台定时器，只有客户端请求（及本地用量后 8s 一次）才会触发平台查询；页面隐藏时客户端退避到 5 分钟。打开的 GUI 按配置间隔刷新。 |
+| 6 | 新增 balances 表但域版本未 bump | ✅ 确认安全，保持 v2：`storage-domain` 打开时只遍历**自身 spec 声明的表**（源码 `lib/index.js` 391–406 行），旧 1.3.x 读取器会忽略 `balances` 目录而账本正常；反而 bump 会让本版读不到现有 v2 账本。已把该理由写入 `host/domain.js` 与 DETAIL。 |
+| 7 | 发布状态未同步 | ✅ 已处理：提交 1.4.0 代码 → 取新 commit SHA → `index.json` 追加 1.4.0 版本条目并单独提交；dist 重新打包为 `dsh-plugin-usage-billing-1.4.0.zip`。 |
+
+回归：`tsc` 0 错误、host 19/19、client 19 方法、jsdom UI 测试通过；浏览器实测无 `[usage-billing]` 错误。
 
 ## 六、剩余限制（明确保留）
 

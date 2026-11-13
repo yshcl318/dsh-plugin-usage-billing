@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.4.0
+
+Actual DeepSeek account balance, with live refresh.
+
+- **Wallet**: reads the signed-in account's recharge and bonus wallets through
+  the platform `deepseekAccount` service and shows the real balance in the
+  sidebar tooltip, the composer capsule tooltip, a new overview strip, the
+  popover and a dedicated Settings → 计费 → 钱包 tab.
+- **Live changes**: a dedicated Client scheduler uses the configured
+  interval (15/30/60/120 s, default 30 s); the Host only queries when asked
+  (no idle platform polling) and again a few seconds after every live model
+  response. Samples are persisted in a new `balances` domain table, so "vs
+  previous sample", "balance drop today" and a short change history survive
+  restarts.
+- **Estimate vs actual**: the strip and wallet tab compare the locally estimated
+  cost with the observed wallet drops today. Daily spend is the sum of observed
+  drops, so a top-up does not hide it; the UI flags days with a top-up.
+  Links to the account's usage/top-up pages come from the account state.
+- Graceful degradation: signed out, missing account service, disabled display
+  and query failures each render a clear state instead of fake numbers; nothing
+  in the ledger or pricing path depends on the wallet.
+- Data: no API key is read or stored; the plugin only calls the platform account
+  service and keeps the observed wallet numbers locally. The client version sent
+  to the platform is read from this package's manifest, not hardcoded.
+
+## 1.3.1
+
 ## 1.3.1
 
 Test/release hygiene only; runtime code unchanged.

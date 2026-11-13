@@ -16,9 +16,8 @@ history and renders UI.
 - **Popover** (`shell.overlay`): this month spent/budget, cumulative sessions and
   projects, today's project/other split, unpriced-model warning and the
   peak/off-peak strip. Escape or a click outside closes it.
-- **Settings → 计费** (`settings.section`): three tabs — Overview (tokens and
-  money, activity heatmap, per-model), Trend (daily bars and table) and Detail
-  (by day / by model / price table, filter, sort, pagination).
+- **Settings → 计费** (`settings.section`): four tabs — Overview, Trend, Detail
+  and Wallet (real account balance, observed changes, refresh settings).
 
 Both resident entries have their own switch in the plugin preferences; the
 Settings page always stays available even when both are off.
@@ -42,6 +41,22 @@ Settings page always stays available even when both are off.
   snapshot recorded at install time and marked as estimated everywhere.
 - The monthly budget (default ¥100) fires the 50% / 80% / 100% notices once per
   month; the progress bar turns amber at ≥80% and red when over budget.
+
+## Actual account balance
+
+The wallet is read from the platform `deepseekAccount` service (recharge and
+bonus wallets); this plugin never reads or stores an API key. Samples are kept
+in the `balances` table of the `usage_billing` domain and pruned to the newest
+1,200 rows. Daily spend is the sum of observed balance drops within the Beijing
+day; a top-up is flagged in the UI instead of being silently counted as zero
+spend, and fewer than two samples for the day reports unknown (`—`). The refresh
+interval is a preference (default 30 s) and drives a client-side scheduler;
+manual refresh bypasses it and a hidden tab backs off to 5 minutes.
+
+Adding the `balances` table did not bump the domain version: per-record readers
+only load the tables declared by their own spec, so a 1.3.x reader ignores the
+extra wallet documents while the version-2 ledger keeps working. Bumping would
+hide the existing ledger from this reader, so the version stays 2.
 
 ## Versioning and v1 data
 

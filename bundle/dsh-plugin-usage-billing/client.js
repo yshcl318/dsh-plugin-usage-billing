@@ -51,6 +51,38 @@ window.__ModuleLoader__.load({
         subagentSuffix: ' (incl. {0} subagent)',
         includeSubagentsTag: 'incl. subagents',
         heatmapHintDays: 'Last {0} days · darker means more spent',
+        tabsBalance: 'Wallet',
+        balanceTitle: 'Actual balance',
+        balanceShort: 'Balance',
+        balanceLive: 'Live',
+        balanceBonus: 'Bonus wallet',
+        balanceUpdated: 'Updated {0}',
+        balanceDelta: 'vs previous sample',
+        balanceTodayCharged: 'Balance drop today*',
+        balanceTodayEstimate: 'Usage estimate today',
+        balanceEstimateDiff: 'Estimate - drop',
+        balanceLoading: 'Loading account balance…',
+        balanceSignedOut: 'Sign in to DeepSeek to show the actual balance.',
+        balanceUnavailable: 'Account balance service is unavailable in this build.',
+        balanceFailed: 'Balance query failed',
+        balanceDisabled: 'Actual balance display is off.',
+        balanceRefresh: 'Refresh balance',
+        balanceRefreshInterval: 'Auto refresh',
+        balanceRefreshHint: 'Manual refresh is always immediate; the wallet check respects this interval.',
+        balanceHistory: 'Observed balance changes',
+        balanceHistoryEmpty: 'No changes observed yet.',
+        balanceTopUp: 'Top up',
+        balanceTopUpDay: 'Top-up today',
+        balanceTopUpHint: 'A top-up was observed today; daily spend is the sum of balance drops.',
+        balanceUsage: 'Usage',
+        balanceNote: 'Read from your DeepSeek account; no usage data is uploaded.',
+        balanceObservedHint: '* anchored at the first observation of the day.',
+        balanceNoChange: 'no change',
+        balanceHintLive: 'auto-refreshing {0}s',
+        balanceCny: 'Recharge balance',
+        balanceTotal: 'Total balance',
+        balanceLow: 'Low balance',
+        balanceSampleTime: 'Sample time',
         builtinPrice: 'built-in price',
         defaultFx: 'default FX ×{0}',
         sessionCount: 'Sessions',
@@ -170,6 +202,38 @@ window.__ModuleLoader__.load({
         subagentSuffix: '（含 {0} 子代理）',
         includeSubagentsTag: '含子代理',
         heatmapHintDays: '最近 {0} 天 · 颜色越深花费越多',
+        tabsBalance: '钱包',
+        balanceTitle: '实际余额',
+        balanceShort: '余额',
+        balanceLive: '实时',
+        balanceBonus: '赠送余额',
+        balanceUpdated: '更新于 {0}',
+        balanceDelta: '较上次',
+        balanceTodayCharged: '今日余额减少*',
+        balanceTodayEstimate: '今日用量估算',
+        balanceEstimateDiff: '估算 − 余额减少',
+        balanceLoading: '正在读取账号余额…',
+        balanceSignedOut: '登录 DeepSeek 账号后显示实际余额。',
+        balanceUnavailable: '当前构建中账号余额服务不可用。',
+        balanceFailed: '余额查询失败',
+        balanceDisabled: '实际余额显示已关闭。',
+        balanceRefresh: '刷新余额',
+        balanceRefreshInterval: '自动刷新',
+        balanceRefreshHint: '手动刷新始终立即执行；自动查询按此间隔进行。',
+        balanceHistory: '余额变动记录',
+        balanceHistoryEmpty: '还没有观察到余额变动。',
+        balanceTopUp: '充值',
+        balanceTopUpDay: '今日有充值',
+        balanceTopUpHint: '今日观察到充值；实扣按余额下降累计。',
+        balanceUsage: '查询用量',
+        balanceNote: '余额来自 DeepSeek 账号接口；不会上传任何用量数据。',
+        balanceObservedHint: '* 以当天第一次观测为锚点。',
+        balanceNoChange: '无变化',
+        balanceHintLive: '每 {0} 秒自动刷新',
+        balanceCny: '充值余额',
+        balanceTotal: '余额合计',
+        balanceLow: '余额偏低',
+        balanceSampleTime: '采样时间',
         builtinPrice: '内置价',
         defaultFx: '默认汇率 ×{0}',
         sessionCount: '会话数',
@@ -365,6 +429,8 @@ window.__ModuleLoader__.load({
       includeSubagents: true,
       showTierCurve: true,
       autoRefreshPricing: true,
+      balanceEnabled: true,
+      balanceRefreshSeconds: 30,
     };
 
     const initialState = {
@@ -378,6 +444,9 @@ window.__ModuleLoader__.load({
       refreshNonce: 0,
       popoverOpen: false,
       noticeDismissed: null,
+      balance: null,
+      balanceAt: 0,
+      balanceError: null,
       savedAt: 0,
       saveError: null,
     };
@@ -438,6 +507,8 @@ window.__ModuleLoader__.load({
       ['status', []],
       ['dismissBackfill', []],
       ['dismissBudgetNotice', ['month']],
+      ['balance', []],
+      ['refreshBalance', ['force']],
     ];
 
     const JSON_CODEC = {
@@ -578,6 +649,14 @@ window.__ModuleLoader__.load({
       return rpc('aliasList');
     }
 
+    async function fetchBalanceRemote() {
+      return rpc('balance');
+    }
+
+    async function fetchRefreshBalanceRemote(force) {
+      return rpc('refreshBalance', force === true);
+    }
+
     async function dismissBudgetNotice(monthKey) {
       try {
         await rpc('dismissBudgetNotice', monthKey);
@@ -627,6 +706,32 @@ window.__ModuleLoader__.load({
 
     function refreshAliases(force) {
       return refreshQuery('aliases', fetchAliasesRemote, 30000, force);
+    }
+
+    let balanceRequest = null;
+
+    /** Load the actual wallet balance; coalesces concurrent callers. */
+    function loadBalance(force) {
+      if (api === null) return Promise.resolve(null);
+      if (balanceRequest !== null) return balanceRequest;
+      balanceRequest = (async () => {
+        try {
+          const data = force === true ? await fetchRefreshBalanceRemote(true) : await fetchBalanceRemote();
+          store.set({ balance: data, balanceAt: Date.now(), balanceError: null });
+          return data;
+        } catch (error) {
+          store.set({ balanceError: String(error?.message ?? error) });
+          warn('读取实际余额失败', error);
+          return null;
+        } finally {
+          balanceRequest = null;
+        }
+      })();
+      return balanceRequest;
+    }
+
+    function refreshBalanceNow() {
+      return loadBalance(true);
     }
 
     async function savePrefs(patch) {
@@ -706,6 +811,19 @@ window.__ModuleLoader__.load({
       .ub-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; border-radius: 999px; padding: 1px 7px; border: 1px solid currentColor; }
       .ub-badge-est { color: var(--dsw-alias-state-warn-primary); }
       .ub-badge-live { color: var(--dsw-alias-state-success-primary); }
+      .ub-balance-card { margin-top: 12px; }
+      .ub-balance-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 18px; }
+      .ub-balance-main { flex: 1 1 220px; min-width: 0; }
+      .ub-balance-amount { font-size: 26px; font-weight: 650; letter-spacing: -0.01em; display: flex; align-items: center; gap: 8px; }
+      .ub-balance-sub { font-size: 11px; color: var(--dsw-alias-label-secondary); margin-top: 3px; }
+      .ub-balance-metric { min-width: 96px; }
+      .ub-balance-metric b { font-size: 14px; }
+      .ub-balance-metric span { display: block; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+      .ub-balance-links { display: flex; gap: 10px; font-size: 12px; }
+      .ub-balance-links a { color: var(--dsw-alias-brand-primary); text-decoration: none; }
+      .ub-balance-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dsw-alias-label-secondary); }
+      .ub-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--dsw-alias-state-success-primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--dsw-alias-state-success-primary) 18%, transparent); animation: ub-pulse 2.4s ease-in-out infinite; }
+      @keyframes ub-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
       .ub-badge-muted { color: var(--dsw-alias-label-secondary); }
       .ub-badge-danger { color: var(--dsw-alias-state-error-primary); }
       .ub-banner { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--dsw-alias-border-l1); border-radius: 9px; padding: 9px 12px; margin-bottom: 12px; font-size: 12px; background: var(--dsw-alias-bg-layer-2); }
@@ -1187,6 +1305,82 @@ window.__ModuleLoader__.load({
         }));
     }
 
+    function signedMoney(value) {
+      if (!isFiniteNumber(value) || Math.abs(value) < 0.00005) return '¥0.00';
+      return (value > 0 ? '+' : '−') + money(Math.abs(value));
+    }
+
+    function balanceHintView(balance) {
+      if (balance === undefined || balance === null) return { tone: 'muted', text: t('balanceLoading') };
+      if (balance.status === 'ready') return { tone: 'live', text: t('balanceLive') };
+      if (balance.status === 'signedOut') return { tone: 'muted', text: t('balanceSignedOut') };
+      if (balance.status === 'unavailable') return { tone: 'muted', text: t('balanceUnavailable') };
+      if (balance.status === 'disabled') return { tone: 'muted', text: t('balanceDisabled') };
+      if (balance.status === 'failed') return { tone: 'danger', text: t('balanceFailed') + (balance.error === null || balance.error === undefined ? '' : ': ' + balance.error) };
+      return { tone: 'muted', text: t('balanceLoading') };
+    }
+
+    function balanceIsLive(balance) {
+      return balance !== null && balance !== undefined && balance.status === 'ready' && isFiniteNumber(balance.totalCny);
+    }
+
+    function BalanceLinks({ links, compact }) {
+      if (links === null || links === undefined) return null;
+      const items = [];
+      if (typeof links.topUpUrl === 'string' && links.topUpUrl !== '') {
+        items.push(h('a', { key: 'topup', href: links.topUpUrl, target: '_blank', rel: 'noreferrer' }, t('balanceTopUp')));
+      }
+      if (typeof links.usageUrl === 'string' && links.usageUrl !== '') {
+        items.push(h('a', { key: 'usage', href: links.usageUrl, target: '_blank', rel: 'noreferrer' }, t('balanceUsage')));
+      }
+      if (items.length === 0) return null;
+      return h('div', { className: 'ub-balance-links', style: compact === true ? { marginTop: 6 } : undefined }, items);
+    }
+
+    function BalanceStrip() {
+      const balance = useStore(s => s.balance);
+      const prefs = useStore(s => s.prefs);
+      const balanceError = useStore(s => s.balanceError);
+      useEffect(() => { void loadBalance(false); }, []);
+      if (prefs.balanceEnabled === false) return null;
+      const hint = balanceHintView(balance);
+      const live = balanceIsLive(balance);
+      const bonus = isFiniteNumber(balance?.bonusCny) ? balance.bonusCny : 0;
+      const seconds = balance?.refreshSeconds ?? prefs.balanceRefreshSeconds ?? 30;
+      const delta = balance?.deltaCny;
+      const sub = live
+        ? t('balanceUpdated', timeText(balance.fetchedAt) || '—') + (delta === null || delta === undefined || Math.abs(delta) < 0.00005 ? '' : ' · ' + signedMoney(delta) + ' ' + t('balanceDelta'))
+        : hint.text;
+      return h(Card, {
+        title: t('balanceTitle'),
+        className: 'ub-balance-card',
+        extra: h('span', { className: 'ub-balance-chip' },
+          live ? h('i', { className: 'ub-live-dot', 'aria-hidden': true }) : null,
+          live ? t('balanceHintLive', String(seconds)) : null,
+          h(Button, { onClick: () => { void refreshBalanceNow(); }, title: t('balanceRefresh'), 'aria-label': t('balanceRefresh') }, t('balanceRefresh'))),
+      },
+      h('div', { className: 'ub-balance-row' },
+        h('div', { className: 'ub-balance-main' },
+          h('div', { className: 'ub-balance-amount' }, live ? money(balance.totalCny) : '—',
+            live ? h('span', { className: 'ub-badge ub-badge-live' }, t('balanceLive')) : null,
+            live && balance.totalCny < 5 ? h('span', { className: 'ub-badge ub-badge-danger' }, t('balanceLow')) : null),
+          h('div', { className: 'ub-balance-sub' }, sub),
+          bonus > 0 ? h('div', { className: 'ub-balance-sub' }, t('balanceBonus') + ' ' + money(bonus)) : null,
+          h(BalanceLinks, { links: balance?.links, compact: true })),
+        h('div', { className: 'ub-balance-metric' },
+          h('b', null, isFiniteNumber(balance?.todaySpentCny) ? money(balance.todaySpentCny) : '—'),
+          h('span', null, t('balanceTodayCharged'))),
+        h('div', { className: 'ub-balance-metric' },
+          h('b', null, isFiniteNumber(balance?.todayEstimatedCny) ? money(balance.todayEstimatedCny) : '—'),
+          h('span', null, t('balanceTodayEstimate'))),
+        h('div', { className: 'ub-balance-metric' },
+          h('b', null, isFiniteNumber(balance?.estimateDiffCny) ? signedMoney(balance.estimateDiffCny) : '—'),
+          h('span', null, t('balanceEstimateDiff')))),
+      h('div', { className: 'ub-small ub-muted', style: { marginTop: 8 } },
+        t('balanceNote') + (balance?.todayTopUp === true ? ' ' + t('balanceTopUpHint') : '') + (balance?.todayBaseline === 'today' ? ' ' + t('balanceObservedHint') : '') +
+        (balanceError === null || balanceError === undefined ? '' : ' · ' + balanceError)));
+    }
+
     function RangeSwitch({ value, onChange }) {
       return h(Segmented, {
         value,
@@ -1216,6 +1410,7 @@ window.__ModuleLoader__.load({
           priceSourceBadge(overview)),
         h(Markers, { overview, models: models.data, daily: daily.data }),
         h(StatGrid, { overview, range }),
+        h(BalanceStrip),
         h('div', { className: 'ub-row-2', style: { marginTop: 12 } },
           h(Card, { title: t('budget'), className: 'ub-budget-card' },
             h(BudgetBlock, { overview }),
@@ -1595,6 +1790,77 @@ window.__ModuleLoader__.load({
     /* Billing page (main panel + settings section share it)            */
     /* ---------------------------------------------------------------- */
 
+    function WalletTab({ ready }) {
+      const balance = useStore(s => s.balance);
+      const prefs = useStore(s => s.prefs);
+      const balanceError = useStore(s => s.balanceError);
+      useEffect(() => { void loadBalance(false); }, []);
+      if (!ready) return h(Empty, { title: t('loading') });
+      const live = balanceIsLive(balance);
+      const hint = balanceHintView(balance);
+      const wallets = Array.isArray(balance?.wallets) ? balance.wallets : [];
+      const walletCny = wallets.filter(wallet => wallet.currency === 'CNY').reduce((sum, wallet) => sum + Number(wallet.balance || 0), 0);
+      const bonus = isFiniteNumber(balance?.bonusCny) ? balance.bonusCny : 0;
+      const seconds = prefs.balanceRefreshSeconds ?? 30;
+      const history = Array.isArray(balance?.history) ? balance.history : [];
+      const historyRows = history.map((point, index) => {
+        const previous = index > 0 ? history[index - 1] : null;
+        return {
+          at: point.at,
+          time: timeText(point.at),
+          total: point.totalCny,
+          delta: previous === null ? null : point.totalCny - previous.totalCny,
+        };
+      }).reverse();
+      const items = [
+        { label: t('balanceCny'), value: live ? money(walletCny) : '—' },
+      ].filter(Boolean);
+      if (bonus > 0) items.push({ label: t('balanceBonus'), value: money(bonus) });
+      items.push(
+        { label: t('balanceTotal'), value: live ? money(balance.totalCny) : '—' },
+        { label: t('balanceDelta'), value: isFiniteNumber(balance?.deltaCny) ? signedMoney(balance.deltaCny) : '—' },
+        { label: t('balanceTodayCharged'), value: isFiniteNumber(balance?.todaySpentCny) ? money(balance.todaySpentCny) : '—' },
+        ...(balance?.todayTopUp === true ? [{ label: t('balanceTopUpDay'), value: '✓' }] : []),
+        { label: t('balanceTodayEstimate'), value: isFiniteNumber(balance?.todayEstimatedCny) ? money(balance.todayEstimatedCny) : '—' },
+        { label: t('balanceEstimateDiff'), value: isFiniteNumber(balance?.estimateDiffCny) ? signedMoney(balance.estimateDiffCny) : '—' },
+        { label: t('balanceSampleTime'), value: timeText(balance?.fetchedAt) || '—' },
+      );
+      return h('div', null,
+        h(Card, { title: t('balanceTitle'), extra: h(Button, { onClick: () => { void refreshBalanceNow(); } }, t('balanceRefresh')) },
+          h('div', { className: 'ub-row', style: { justifyContent: 'space-between', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' } },
+            h('div', null,
+              h('div', { className: 'ub-balance-amount' }, live ? money(balance.totalCny) : '—'),
+              h('div', { className: 'ub-balance-sub' }, live ? t('balanceUpdated', timeText(balance.fetchedAt) || '—') : hint.text)),
+            h(BalanceLinks, { links: balance?.links })),
+          h('div', { style: { marginTop: 10 } }, h(Kv, { items }))),
+        h(Card, { title: t('balanceRefreshInterval'), style: { marginTop: 12 } },
+          h(SwitchRow, {
+            label: t('balanceTitle'),
+            checked: prefs.balanceEnabled !== false,
+            onChange: value => { void savePrefs({ balanceEnabled: value }); },
+          }),
+          h(Segmented, {
+            value: String(seconds),
+            options: [15, 30, 60, 120].map(value => ({ value: String(value), label: String(value) + 's' })),
+            onChange: value => { void savePrefs({ balanceRefreshSeconds: Number(value) }); },
+          }),
+          h('div', { className: 'ub-small ub-muted', style: { marginTop: 6 } }, t('balanceRefreshHint'))),
+        h(Card, { title: t('balanceHistory'), style: { marginTop: 12 } },
+          historyRows.length === 0
+            ? h(Empty, { title: t('balanceHistoryEmpty') })
+            : h(DataTable, {
+              columns: [
+                { key: 'time', label: t('balanceSampleTime'), render: row => row.time },
+                { key: 'total', label: t('balanceTotal'), numeric: true, render: row => money(row.total) },
+                { key: 'delta', label: t('balanceDelta'), numeric: true, render: row => row.delta === null ? '—' : signedMoney(row.delta) },
+              ],
+              rows: historyRows.slice(0, 40),
+              empty: { title: t('balanceHistoryEmpty'), hint: t('balanceNote') },
+            })),
+        h('div', { className: 'ub-small ub-muted', style: { marginTop: 8 } },
+          t('balanceNote') + (balanceError === null || balanceError === undefined ? '' : ' · ' + balanceError)));
+    }
+
     function BillingPage({ mode, close, sessionCwd }) {
       const connection = useStore(s => s.connection);
       const connectionError = useStore(s => s.connectionError);
@@ -1627,7 +1893,7 @@ window.__ModuleLoader__.load({
           h('div', { className: 'ub-row' },
             settingsMode && close !== undefined ? h(Button, { onClick: () => { close(); } }, t('close')) : null,
             mode !== 'settings'
-              ? h(Button, { onClick: () => { store.set(state => ({ tick: state.tick + 1, refreshNonce: (state.refreshNonce ?? 0) + 1 })); } }, t('refresh'))
+              ? h(Button, { onClick: () => { store.set(state => ({ tick: state.tick + 1, refreshNonce: (state.refreshNonce ?? 0) + 1 })); void refreshBalanceNow(); } }, t('refresh'))
               : null)),
         connection !== 'ready'
           ? h(Banner, { tone: connection === 'failed' ? 'danger' : 'warn', title: t('noRemote') },
@@ -1657,12 +1923,14 @@ window.__ModuleLoader__.load({
             { value: 'overview', label: t('tabsOverview') },
             { value: 'trend', label: t('tabsTrend') },
             { value: 'detail', label: t('tabsDetail') },
+            { value: 'wallet', label: t('tabsBalance') },
           ],
           onChange: setTab,
         }),
         tab === 'overview' ? h(OverviewTab, { ready, cwd: sessionCwd, settingsMode }) : null,
         tab === 'trend' ? h(TrendTab, { ready, cwd: sessionCwd }) : null,
-        tab === 'detail' ? h(DetailTab, { ready, settingsMode }) : null);
+        tab === 'detail' ? h(DetailTab, { ready, settingsMode }) : null,
+        tab === 'wallet' ? h(WalletTab, { ready }) : null);
     }
 
     /** Root-scoped billing surface: derives the project cwd from slot contexts. */
@@ -1681,16 +1949,32 @@ window.__ModuleLoader__.load({
       const queries = useStore(s => s.queries);
       const prefs = useStore(s => s.prefs);
       const connection = useStore(s => s.connection);
+      const balance = useStore(s => s.balance);
+      const includeSubagents = prefs.includeSubagents !== false;
+      // Keep the entry tooltip/ring fresh even when the panel has never been
+      // opened; the shared heartbeat refreshes this query like any other.
+      const sidebarOverview = useQuery(
+        `overview:month:${includeSubagents ? 1 : 0}:`,
+        () => fetchOverviewRemote('month', includeSubagents, null),
+        [includeSubagents],
+      );
       let ratio = 0;
       let level = 'ok';
-      for (const [key, value] of Object.entries(queries)) {
-        if (!key.startsWith(overviewKeyPrefix)) continue;
-        const month = value?.data?.month;
-        if (month === undefined || month === null) continue;
-        const monthly = prefs.monthlyCny ?? month.monthlyCny ?? 100;
-        ratio = monthly > 0 ? month.spentCny / monthly : 0;
-        level = budgetLevel(month.spentCny, monthly);
-        break;
+      const sidebarMonth = sidebarOverview.data?.month;
+      if (sidebarMonth !== undefined && sidebarMonth !== null) {
+        const monthly = prefs.monthlyCny ?? sidebarMonth.monthlyCny ?? 100;
+        ratio = monthly > 0 ? sidebarMonth.spentCny / monthly : 0;
+        level = budgetLevel(sidebarMonth.spentCny, monthly);
+      } else {
+        for (const [key, value] of Object.entries(queries)) {
+          if (!key.startsWith(overviewKeyPrefix)) continue;
+          const month = value?.data?.month;
+          if (month === undefined || month === null) continue;
+          const monthly = prefs.monthlyCny ?? month.monthlyCny ?? 100;
+          ratio = monthly > 0 ? month.spentCny / monthly : 0;
+          level = budgetLevel(month.spentCny, monthly);
+          break;
+        }
       }
       if (connection !== 'ready' || prefs.budgetEnabled === false) {
         return h('span', { className: 'ub-entry-icon', style: { color: 'currentColor' } },
@@ -1698,7 +1982,7 @@ window.__ModuleLoader__.load({
             h('circle', { cx: 8, cy: 8, r: 6, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 }),
             h('path', { d: 'M8 4.5v7M6 6.2c0-.8.9-1.4 2-1.4s2 .6 2 1.4-.9 1.2-2 1.6-2 .8-2 1.6.9 1.4 2 1.4 2-.6 2-1.4', fill: 'none', stroke: 'currentColor', strokeWidth: 1.4, strokeLinecap: 'round' })));
       }
-      return h('span', { className: 'ub-entry-icon', style: { color: 'currentColor' }, title: `${percentText(ratio)}` },
+      return h('span', { className: 'ub-entry-icon', style: { color: 'currentColor' }, title: balanceIsLive(balance) ? `${percentText(ratio)} · ${t('balanceShort')} ${money(balance.totalCny)}` : `${percentText(ratio)}` },
         h(Ring, { ratio, size, level, stroke: 2.4 }));
     }
 
@@ -1726,6 +2010,7 @@ window.__ModuleLoader__.load({
       const ratio = monthly > 0 ? (budget?.spentCny ?? 0) / monthly : 0;
       const level = budget?.level ?? budgetLevel(budget?.spentCny ?? 0, monthly);
       const popoverOpen = useStore(s => s.popoverOpen);
+      const balance = useStore(s => s.balance);
       const showNotice = budget?.notice !== null && budget?.notice !== undefined;
       if (prefs.entryComposer === false) return null;
       return h(Fragment, null,
@@ -1747,8 +2032,8 @@ window.__ModuleLoader__.load({
           'data-dsh-ub-capsule': 'true',
           'aria-haspopup': 'dialog',
           'aria-expanded': popoverOpen === true,
-          'aria-label': t('capsuleHint'),
-          title: t('capsuleHint'),
+          'aria-label': balanceIsLive(balance) ? t('balanceShort') + ' ' + money(balance.totalCny) + ' · ' + t('capsuleHint') : t('capsuleHint'),
+          title: balanceIsLive(balance) ? t('balanceShort') + ' ' + money(balance.totalCny) + ' · ' + t('capsuleHint') : t('capsuleHint'),
           onClick: () => {
             void refreshSessionCost(sessionId, includeSubagents);
             if (api !== null) void rpc('overview', 'month', includeSubagents, typeof cwd === 'string' ? cwd : null).then(result => {
@@ -1760,6 +2045,9 @@ window.__ModuleLoader__.load({
         h(Donut, { ratio, size: 14, level }),
         h('span', { className: 'ub-muted' }, `${t('session')}`),
         h('strong', null, money(cost)),
+        balanceIsLive(balance)
+          ? h('span', { className: 'ub-small ub-muted', style: { marginLeft: 6 } }, `${t('balanceShort')} ${money(balance.totalCny)}`)
+          : null,
         connection !== 'ready' ? h('span', { className: 'ub-badge ub-badge-muted' }, '—') : null));
     }
 
@@ -1785,6 +2073,7 @@ window.__ModuleLoader__.load({
         return newest?.data ?? null;
       }, [queries]);
       const sessionCost = sessionId === null ? null : queries[`session:${sessionId}:${includeSubagents ? 1 : 0}`]?.data ?? null;
+      const balance = useStore(s => s.balance);
       useEffect(() => {
         if (!open) return undefined;
         const previous = typeof document !== 'undefined' ? /** @type {HTMLElement | null} */ (document.activeElement) : null;
@@ -1808,6 +2097,7 @@ window.__ModuleLoader__.load({
           (close ?? dialog)?.focus?.();
         }, 30);
         void refreshOverview('month', includeSubagents, cwd).catch(error => warn('refresh popover overview failed', error));
+        void loadBalance(false);
         return () => {
           clearTimeout(timer);
           document.removeEventListener('keydown', onKey, true);
@@ -1860,6 +2150,21 @@ window.__ModuleLoader__.load({
             h('div', { className: 'ub-row ub-small ub-muted', style: { justifyContent: 'space-between', marginTop: 5 } },
               h('span', null, budget.enabled ? `${percentText(budget.ratio)} ${t('spent')}` : '—'),
               h('span', null, budget.enabled ? `${t('remaining')} ${money(budget.remaining)}` : ''))),
+          h('div', { style: { height: 10 } }),
+          h(Card, { title: t('balanceTitle') },
+            balanceIsLive(balance)
+              ? h(Fragment, null,
+                h('div', { className: 'ub-row', style: { justifyContent: 'space-between', marginBottom: 6 } },
+                  h('b', { style: { fontSize: 20 } }, money(balance.totalCny)),
+                  h('span', { className: 'ub-small ub-muted' },
+                    (isFiniteNumber(balance.deltaCny) ? signedMoney(balance.deltaCny) + ' · ' : '') + (timeText(balance.fetchedAt) || '—'))),
+                h(Kv, { items: [
+                  { label: t('balanceTodayCharged'), value: isFiniteNumber(balance.todaySpentCny) ? money(balance.todaySpentCny) : '—' },
+                  { label: t('balanceTodayEstimate'), value: isFiniteNumber(balance.todayEstimatedCny) ? money(balance.todayEstimatedCny) : '—' },
+                  { label: t('balanceEstimateDiff'), value: isFiniteNumber(balance.estimateDiffCny) ? signedMoney(balance.estimateDiffCny) : '—' },
+                ] }),
+                h(BalanceLinks, { links: balance.links, compact: true }))
+              : h('div', { className: 'ub-small ub-muted' }, balanceHintView(balance).text)),
           h('div', { style: { height: 10 } }),
           h(Card, { title: t('cumulative') },
             h(Kv, {
@@ -2004,7 +2309,16 @@ window.__ModuleLoader__.load({
           ));
         }
       };
-      prefsUnsubscribe = store.subscribe(syncEntries);
+      const onPrefsChanged = () => {
+        syncEntries();
+        const prefs = store.get().prefs ?? DEFAULT_PREFS;
+        const key = String(prefs.balanceEnabled) + ':' + String(prefs.balanceRefreshSeconds);
+        if (key !== lastBalanceKey) {
+          lastBalanceKey = key;
+          scheduleBalance();
+        }
+      };
+      prefsUnsubscribe = store.subscribe(onPrefsChanged);
       syncEntries();
 
       try {
@@ -2024,6 +2338,35 @@ window.__ModuleLoader__.load({
         }
       }, 8000);
       let remoteFiber = null;
+      let balanceTimer = null;
+      let lastBalanceKey = '';
+      const balanceDelayMs = () => {
+        const prefs = store.get().prefs ?? DEFAULT_PREFS;
+        const raw = Number(prefs.balanceRefreshSeconds);
+        const configured = Number.isFinite(raw) && raw >= 10 ? raw : 30;
+        const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+        return (hidden ? Math.max(300, configured) : Math.max(15, configured)) * 1000;
+      };
+      const scheduleBalance = () => {
+        if (balanceTimer !== null) {
+          clearTimeout(balanceTimer);
+          balanceTimer = null;
+        }
+        if (disposed || api === null) return;
+        const prefs = store.get().prefs ?? DEFAULT_PREFS;
+        if (prefs.balanceEnabled === false || store.get().connection !== 'ready') return;
+        balanceTimer = setTimeout(async () => {
+          balanceTimer = null;
+          if (disposed || api === null) return;
+          try {
+            await loadBalance(false);
+          } finally {
+            if (!disposed) scheduleBalance();
+          }
+        }, balanceDelayMs());
+      };
+      const onVisibility = () => scheduleBalance();
+      if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibility);
       try {
         remoteFiber = ctx.inject(['remote'], (remoteCtx) => {
           let unmountRemote = null;
@@ -2048,6 +2391,8 @@ window.__ModuleLoader__.load({
               api = inner.remote[NS];
               store.set({ connection: 'ready', connectionError: null });
               void loadPrefs().catch(error => warn('读取偏好失败', error));
+              void loadBalance(false);
+              scheduleBalance();
             } catch (error) {
               warn('读取远程命名空间失败', error);
               store.set({ connection: 'failed', connectionError: String(error?.message ?? error) });
@@ -2074,6 +2419,11 @@ window.__ModuleLoader__.load({
         disposed = true;
         clearInterval(heartbeat);
         clearTimeout(remoteTimeout);
+        if (balanceTimer !== null) {
+          clearTimeout(balanceTimer);
+          balanceTimer = null;
+        }
+        if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibility);
         try { prefsUnsubscribe(); } catch { /* detached */ }
         for (const dispose of entriesDisposers) {
           try { dispose(); } catch { /* detached */ }
@@ -2089,7 +2439,7 @@ window.__ModuleLoader__.load({
       });
     }
 
-    const __internals = { todayCallsOf, rangeLabelText, priceSourceBadge, sparseHeatmap, budgetView, buildHeatmap };
+    const __internals = { todayCallsOf, rangeLabelText, priceSourceBadge, sparseHeatmap, budgetView, buildHeatmap, signedMoney, balanceHintView, balanceIsLive };
 
     return { inject: ['slots'], apply, __internals };
   },

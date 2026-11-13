@@ -5,6 +5,7 @@
  * exercised without installing anything.
  */
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { UsageBillingService, REMOTE_METHODS } from '../bundle/dsh-plugin-usage-billing/host/service.js';
 import { USAGE_BILLING_DOMAIN, DEFAULT_PREFS, createDomainSpec } from '../bundle/dsh-plugin-usage-billing/host/domain.js';
 import {
@@ -12,7 +13,11 @@ import {
   tierAndFactorAt, tierAt, nextTierSwitchAt,
 } from '../bundle/dsh-plugin-usage-billing/host/pricing.js';
 import { extractUsageItems } from '../bundle/dsh-plugin-usage-billing/host/collector.js';
+import {
+  balanceView, shouldAppendBalance, snapshotFromBalance, walletSum,
+} from '../bundle/dsh-plugin-usage-billing/host/balance.js';
 
+const manifestVersion = JSON.parse(readFileSync(new URL('../bundle/dsh-plugin-usage-billing/package.json', import.meta.url), 'utf8')).version;
 const results = [];
 function test(name, fn) {
   try {
@@ -108,10 +113,10 @@ function assistantEvent(seq, time, provider, model, usage) {
 }
 
 /**
- * @param {{ sessions?: any[], liveContainer?: any }} [options]
+ * @param {{ sessions?: any[], liveContainer?: any, account?: any }} [options]
  */
 function createCtx(options = {}) {
-  const { sessions = [], liveContainer } = /** @type {any} */ (options);
+  const { sessions = [], liveContainer, account } = /** @type {any} */ (options);
   const warnings = [];
   const listeners = new Map();
   const byId = new Map(sessions.map(session => [session.header.id, session]));
@@ -122,6 +127,7 @@ function createCtx(options = {}) {
       debug: () => {},
     },
     get(name) {
+      if (name === 'deepseekAccount') return account;
       if (name === 'sessionQuery') {
         return {
           listSessions: async () => sessions.map(session => ({ header: session.header, live: false, persisted: true })),
@@ -452,6 +458,126 @@ async function run() {
     const prefs = spec.tables.prefs.valueSchema;
     assert.equal(prefs.safeParse({ ...DEFAULT_PREFS }).success, true);
     assert.equal(prefs.safeParse({ budgetEnabled: 'yes' }).success, false);
+    assert.equal(prefs.safeParse({ ...DEFAULT_PREFS, balanceEnabled: false, balanceRefreshSeconds: 15 }).success, true);
+    assert.equal(prefs.safeParse({ ...DEFAULT_PREFS, balanceRefreshSeconds: 'fast' }).success, false);
+    const balances = spec.tables.balances.valueSchema;
+    assert.equal(balances.safeParse({ id: 'bal-1', at: 1, cny: 11.8, bonusCny: 0, usd: 0, source: 'account' }).success, true);
+    assert.equal(balances.safeParse({ id: 1, at: 'x' }).success, false);
+  });
+
+  await testAsync('balance helpers parse wallets and compute observed changes', async () => {
+    const details = {
+      status: 'ready',
+      value: [{ currency: 'CNY', balance: '11.7849021200000000' }],
+      bonusWallets: [{ currency: 'CNY', balance: '0' }],
+    };
+    assert.equal(walletSum(details.value, 'CNY'), 11.784902);
+    const row = snapshotFromBalance(details, Date.parse('2026-11-13T02:00:00Z'));
+    assert.equal(row.cny, 11.784902);
+    assert.equal(row.bonusCny, 0);
+    assert.equal(row.source, 'account');
+    const usdRow = snapshotFromBalance({ status: 'ready', value: [{ currency: 'USD', balance: '2' }], bonusWallets: [] }, Date.parse('2026-11-13T04:00:00Z'));
+    assert.equal(usdRow.usd, 2);
+    const view = balanceView([row, usdRow], {
+      now: Date.parse('2026-11-13T05:00:00Z'), todayKey: '2026-11-13', usdToCny: 7.1,
+      estimatedTodayCny: 0.4, estimatedMonthCny: 12, links: null,
+      status: 'ready', enabled: true, refreshSeconds: 30, error: null,
+    });
+    assert.equal(view.ready, true);
+    assert.ok(Math.abs(view.totalCny - 14.2) < 1e-9);
+    assert.equal(view.todayBaseline, 'today');
+    assert.equal(view.todaySpentCny, 0);
+    const spent = balanceView([
+      { id: 'b1', at: Date.parse('2026-11-13T02:00:00Z'), cny: 12, bonusCny: 0, usd: 0, bonusUsd: 0, source: 'account' },
+      { id: 'b2', at: Date.parse('2026-11-13T04:00:00Z'), cny: 11.8, bonusCny: 0, usd: 0, bonusUsd: 0, source: 'account' },
+    ], {
+      now: Date.parse('2026-11-13T05:00:00Z'), todayKey: '2026-11-13', usdToCny: 7.1,
+      estimatedTodayCny: 0.4, estimatedMonthCny: 12, links: null,
+      status: 'ready', enabled: true, refreshSeconds: 30, error: null,
+    });
+    assert.equal(spent.todayBaseline, 'today');
+    assert.ok(Math.abs(spent.todaySpentCny - 0.2) < 1e-9);
+    assert.ok(Math.abs(spent.deltaCny + 0.2) < 1e-9);
+    assert.ok(Math.abs(spent.estimateDiffCny - 0.2) < 1e-9);
+    assert.equal(spent.todayTopUp, false);
+    const toppedUp = balanceView([
+      { id: 't1', at: Date.parse('2026-11-13T01:00:00Z'), cny: 12, bonusCny: 0, usd: 0, bonusUsd: 0, source: 'account' },
+      { id: 't2', at: Date.parse('2026-11-13T02:00:00Z'), cny: 10, bonusCny: 0, usd: 0, bonusUsd: 0, source: 'account' },
+      { id: 't3', at: Date.parse('2026-11-13T03:00:00Z'), cny: 20, bonusCny: 0, usd: 0, bonusUsd: 0, source: 'account' },
+      { id: 't4', at: Date.parse('2026-11-13T04:00:00Z'), cny: 18, bonusCny: 0, usd: 0, bonusUsd: 0, source: 'account' },
+    ], {
+      now: Date.parse('2026-11-13T05:00:00Z'), todayKey: '2026-11-13', usdToCny: 7.1,
+      estimatedTodayCny: 5, estimatedMonthCny: 30, links: null,
+      status: 'ready', enabled: true, refreshSeconds: 30, error: null,
+    });
+    assert.equal(toppedUp.todayTopUp, true);
+    assert.ok(Math.abs(toppedUp.todaySpentCny - 4) < 1e-9);
+    const empty = balanceView([], {
+      now: 1, todayKey: '2026-11-13', usdToCny: 7.1, estimatedTodayCny: 1, estimatedMonthCny: 2,
+      links: null, status: 'loading', enabled: true, refreshSeconds: 30, error: null,
+    });
+    assert.equal(empty.ready, false);
+    assert.equal(empty.totalCny, null);
+    assert.equal(empty.todaySpentCny, null);
+    assert.equal(shouldAppendBalance(row, row, row.at + 60000), false);
+    assert.equal(shouldAppendBalance(row, { ...row, cny: row.cny - 0.2 }, row.at + 60000), true);
+  });
+
+  await testAsync('wallet reflects the account service and persists observed changes', async () => {
+    let balanceValue = '12.00';
+    const accountCalls = [];
+    const account = {
+      getBalance: async (meta) => {
+        accountCalls.push(meta);
+        return { status: 'ready', value: [{ currency: 'CNY', balance: balanceValue }], bonusWallets: [{ currency: 'CNY', balance: '0' }] };
+      },
+      getState: async () => ({ status: 'credential-stored', links: { usageUrl: 'https://platform.test/usage', topUpUrl: 'https://platform.test/topup' }, attempt: null }),
+    };
+    const walletDomain = createDomain();
+    const wallet = new UsageBillingService(createCtx({ sessions: [], account }));
+    try {
+    await wallet.attach(walletDomain);
+    await waitUntil(() => wallet.ready);
+    const first = await wallet.balance();
+    assert.equal(first.status, 'ready');
+    assert.ok(Math.abs(first.totalCny - 12) < 1e-9);
+    assert.equal(first.links.topUpUrl, 'https://platform.test/topup');
+    assert.ok(accountCalls.length >= 1);
+    assert.equal(accountCalls[0].timezoneOffsetSeconds, -new Date().getTimezoneOffset() * 60);
+    assert.equal(accountCalls[0].version, manifestVersion);
+    balanceValue = '11.80';
+    const second = await wallet.refreshBalance(true);
+    assert.equal(second.status, 'ready');
+    assert.ok(Math.abs(second.totalCny - 11.80) < 1e-9);
+    assert.ok(Math.abs(second.deltaCny + 0.2) < 1e-9);
+    const overview = await wallet.overview('month', true, null);
+    assert.equal(overview.balance.status, 'ready');
+    assert.ok(Math.abs(overview.balance.totalCny - 11.80) < 1e-9);
+    const status = await wallet.status();
+    assert.equal(status.balance.account, true);
+    assert.ok(status.balance.samples >= 2);
+    await wallet.savePrefs({ balanceEnabled: false });
+    const paused = await wallet.balance();
+    assert.equal(paused.status, 'disabled');
+    assert.ok(walletDomain.tables.get('balances') !== undefined && walletDomain.tables.get('balances').size >= 2);
+    } finally {
+      await wallet.dispose();
+    }
+  });
+
+  await testAsync('signed-out and missing account service degrade without throwing', async () => {
+    const signedOut = new UsageBillingService(createCtx({ sessions: [], account: { getBalance: async () => null, getState: async () => ({ links: { usageUrl: '', topUpUrl: '' } }) } }));
+    await signedOut.attach(createDomain());
+    await waitUntil(() => signedOut.ready);
+    assert.equal((await signedOut.balance()).status, 'signedOut');
+    await signedOut.dispose();
+    const missing = new UsageBillingService(createCtx({ sessions: [] }));
+    await missing.attach(createDomain());
+    await waitUntil(() => missing.ready);
+    const view = await missing.balance();
+    assert.equal(view.status, 'unavailable');
+    assert.equal(view.totalCny, null);
+    await missing.dispose();
   });
 
   await testAsync('network pricing failure degrades without throwing', async () => {

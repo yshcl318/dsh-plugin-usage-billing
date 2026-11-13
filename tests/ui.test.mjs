@@ -58,6 +58,35 @@ const prefsFixture = {
   includeSubagents: true,
   showTierCurve: true,
 };
+const balanceFixture = {
+  ready: true,
+  enabled: true,
+  status: 'ready',
+  wallets: [{ currency: 'CNY', balance: '11.784902' }],
+  bonusWallets: [{ currency: 'CNY', balance: '0' }],
+  totalCny: 11.784902,
+  bonusCny: 0,
+  usd: 0,
+  fetchedAt: Date.now(),
+  previousAt: Date.now() - 30000,
+  previousCny: 12,
+  deltaCny: -0.2,
+  todayKey: '2026-11-13',
+  todayStartCny: 12,
+  todayBaseline: 'today',
+  todaySpentCny: 0.2,
+  todayEstimatedCny: 0.3,
+  estimateDiffCny: 0.1,
+  monthEstimatedCny: 12,
+  history: [
+    { at: Date.now() - 30000, totalCny: 12, cny: 12, bonusCny: 0, usd: 0 },
+    { at: Date.now(), totalCny: 11.78, cny: 11.78, bonusCny: 0, usd: 0 },
+  ],
+  links: { usageUrl: 'https://platform.test/usage', topUpUrl: 'https://platform.test/topup' },
+  refreshSeconds: 30,
+  error: null,
+  now: Date.now(),
+};
 const overviewFixture = {
   ready: true,
   range: 'month',
@@ -84,6 +113,7 @@ const overviewFixture = {
     day: { workday: true, peakWindows: [[540, 720], [840, 1080]], offPeakRatio: 0.5, utcOffsetMinutes: 480 },
   },
   pricing: { live: false, usdToCny: 7.1, snapshotId: 'snap', entries: 10, customKeys: [] },
+  balance: balanceFixture,
   prefs: prefsFixture,
 };
 const days = Array.from({ length: 30 }, (_, index) => {
@@ -132,6 +162,8 @@ function mockApi(contribution) {
       calls.push({ method: descriptor.method, args });
       switch (descriptor.method) {
         case 'prefs': return { ok: true, value: { ready: true, prefs: prefsFixture } };
+        case 'balance': return { ok: true, value: balanceFixture };
+        case 'refreshBalance': return { ok: true, value: balanceFixture };
         case 'overview': return { ok: true, value: { ...overviewFixture, range: args[0] } };
         case 'sessionCost': return {
           ok: true,
@@ -264,6 +296,10 @@ assert.ok(panelText.includes('最近 14 天'), 'heatmap hint should state the re
 assert.ok(/784|24/.test(panelText) || panelText.includes('24'), 'today calls should come from todaySplit.totalCalls');
 assert.ok(panelText.includes('含子代理'), 'budget rows should mark the subagent scope');
 assert.ok(panelText.includes('内置价'), 'price source badge should be visible when prices are not live');
+// Real account balance strip is rendered from the wallet payload.
+assert.ok(panelText.includes('实际余额'), 'balance card should render');
+assert.ok(panelText.includes('¥11.78'), 'balance amount should render');
+assert.ok(mainContainer.querySelectorAll('.ub-live-dot').length >= 1, 'live dot should mark a live wallet');
 assert.ok(!/% 已用/.test(panelText.split('月度预算')[0] ?? ''), 'month stat card should not duplicate the budget percentage');
 assert.equal(mainContainer.querySelectorAll('.ub-card [data-dsh-ub-tier]').length, 1, 'peak/off-peak strip should live inside the budget card');
 

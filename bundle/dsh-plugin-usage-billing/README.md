@@ -17,9 +17,10 @@ history and renders UI.
   projects, today's project/other split, unpriced-model warning and the
   peak/off-peak strip. Escape or a click outside closes it; Tab is trapped inside
   and focus returns to the capsule.
-- **Settings → 计费** (`settings.section`): three tabs — Overview (tokens and
-  money, activity heatmap, per-model), Trend (daily bars and table) and Detail
-  (by day / by model / price table, filter, sort, pagination).
+- **Settings → 计费** (`settings.section`): four tabs — Overview (tokens and
+  money, activity heatmap, per-model), Trend (daily bars and table), Detail
+  (by day / by model / price table, filter, sort, pagination) and Wallet (real
+  account balance, observed changes, refresh settings).
 
 Both resident entries have their own switch in the plugin preferences; the
 Settings page always stays available even when both are off.
@@ -47,6 +48,28 @@ Settings page always stays available even when both are off.
   month and keeps each unacknowledged notice until dismissed; the progress bar
   turns amber at ≥80% and red when over budget. A budget of `0` is treated as
   disabled, not as a silent 0% bar.
+
+## Actual account balance
+
+The plugin asks the platform's `deepseekAccount` service for the signed-in
+account's recharge and bonus wallets — no API key is read, stored or sent by
+this plugin. The observed wallets are shown as the **实际余额** strip in the
+panel (also in the popover and the Wallet tab), with:
+
+- **balance drop today** — the sum of observed balance decreases between the
+  samples of the current Beijing day; a top-up is flagged and does not hide the
+  spend, and a single sample reports `—` instead of a fake 0;
+- **estimated today** — the local ledger cost of the same day, so the
+  difference between estimated and actually charged money is visible;
+- **vs previous sample** and a persisted change history;
+- **link out** to the account usage and top-up pages.
+
+Refresh cadence is configurable (15/30/60/120 s, default 30 s) and drives a
+client-side scheduler; every manual refresh is immediate, and a live model
+response triggers one extra check after a few seconds. There is no host-side
+idle polling: with no open UI the plugin does not call the platform. Hidden
+tabs back off to 5 minutes. Signed-out or unavailable states are labeled
+instead of showing a fake zero.
 
 ## Data, install and privacy
 

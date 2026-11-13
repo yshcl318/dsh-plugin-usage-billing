@@ -21,6 +21,7 @@ const isOptionalString = value => value === undefined || isString(value);
 const isOptionalNumber = value => value === undefined || isFiniteNumber(value);
 const isOptionalObject = value => value === undefined || isObject(value);
 const isBool = value => typeof value === 'boolean';
+const isOptionalBool = value => value === undefined || isBool(value);
 
 /* ------------------------------------------------------------------ */
 /* Record predicates                                                  */
@@ -88,7 +89,18 @@ const prefsOk = prefs => isObject(prefs)
   && isBool(prefs.entrySidebar)
   && isBool(prefs.entryComposer)
   && isBool(prefs.includeSubagents)
-  && isBool(prefs.showTierCurve);
+  && isBool(prefs.showTierCurve)
+  && isOptionalBool(prefs.balanceEnabled)
+  && (prefs.balanceRefreshSeconds === undefined || isFiniteNumber(prefs.balanceRefreshSeconds));
+
+const balanceRowOk = row => isObject(row)
+  && isString(row.id)
+  && isFiniteNumber(row.at)
+  && isFiniteNumber(row.cny)
+  && isFiniteNumber(row.bonusCny)
+  && isFiniteNumber(row.usd)
+  && (row.bonusUsd === undefined || isFiniteNumber(row.bonusUsd))
+  && row.source === 'account';
 
 const diagnosticOk = record => isObject(record)
   && isString(record.id)
@@ -161,6 +173,7 @@ function buildSpec(zod) {
       aliases: { valueSchema: makeSchema(zod, modelAliasOk, 'model alias') },
       custom: { valueSchema: makeSchema(zod, customTableOk, 'custom price table') },
       prefs: { valueSchema: makeSchema(zod, prefsOk, 'preferences') },
+      balances: { valueSchema: makeSchema(zod, balanceRowOk, 'balance snapshot') },
       diag: { valueSchema: makeSchema(zod, diagnosticOk, 'diagnostic') },
     },
   });
@@ -252,6 +265,12 @@ export const DOMAIN_NAME = 'usage_billing';
  * `compatibleVersions` entry makes those stale per-record documents read as
  * absent instead of failing validation or mixing two ledgers; the files stay
  * untouched on disk.
+ *
+ * Adding a table (the `balances` wallet samples in 1.4.0) does not need a
+ * version bump: per-record readers only load the tables declared by their own
+ * spec, so an older 1.3.x reader ignores the extra `balances` documents while
+ * the ledger stays version 2. Bumping would instead hide the existing v2
+ * ledger from this version, which is far worse than an ignored table.
  */
 export const DOMAIN_VERSION = 2;
 
@@ -259,7 +278,8 @@ export const DOMAIN_VERSION = 2;
  * Default preferences (also the shape persisted in the prefs table).
  * @type {{ budgetEnabled: boolean, monthlyCny: number, entrySidebar: boolean,
  *   entryComposer: boolean, includeSubagents: boolean, showTierCurve: boolean,
- *   autoRefreshPricing?: boolean, refreshHours?: number }}
+ *   autoRefreshPricing?: boolean, refreshHours?: number,
+ *   balanceEnabled: boolean, balanceRefreshSeconds: number }}
  */
 export const DEFAULT_PREFS = Object.freeze({
   budgetEnabled: true,
@@ -268,6 +288,8 @@ export const DEFAULT_PREFS = Object.freeze({
   entryComposer: true,
   includeSubagents: true,
   showTierCurve: true,
+  balanceEnabled: true,
+  balanceRefreshSeconds: 30,
 });
 
 /** Row id: one assistant message is unique by (session, seq). */

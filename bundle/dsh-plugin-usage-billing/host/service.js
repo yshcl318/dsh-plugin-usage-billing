@@ -16,6 +16,8 @@
  * opening, so every method answers a safe "not ready" snapshot until then.
  */
 
+import { createRequire } from 'node:module';
+
 import { TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol';
 
 import {
@@ -33,6 +35,10 @@ import {
 import {
   extractUsageItems, listStoredSessions, readSessionEvents, sessionMetaOf, warn,
 } from './collector.js';
+import {
+  balanceView, emptyBalanceView, normalizeAccountBalance, pruneBalanceHistory,
+  shouldAppendBalance, snapshotFromBalance,
+} from './balance.js';
 
 /** Wire namespace and Cordis service key. */
 export const REMOTE_NAMESPACE = 'usageBilling';
@@ -42,7 +48,7 @@ export const REMOTE_METHODS = Object.freeze([
   'overview', 'sessionCost', 'daily', 'byModel', 'byWorkspace',
   'pricing', 'prefs', 'savePrefs', 'setCustomPrice', 'removeCustomPrice',
   'refreshPricing', 'setAlias', 'aliasList', 'repricing', 'status', 'dismissBackfill',
-  'dismissBudgetNotice',
+  'dismissBudgetNotice', 'balance', 'refreshBalance',
 ]);
 
 const REMOTE_METHODS_KEY = '@deepseek-ai/dsh-typert-protocol/remote-methods';
@@ -59,6 +65,21 @@ function markRemoteMethods(prototype, methods) {
       }))),
     }),
   });
+}
+
+const requireFromBundle = createRequire(import.meta.url);
+let packageVersionCache = null;
+
+/** Bundle version reported to the account service (no hardcoded release tag). */
+function packageVersion() {
+  if (packageVersionCache !== null) return packageVersionCache;
+  try {
+    const manifest = requireFromBundle('../package.json');
+    packageVersionCache = typeof manifest?.version === 'string' ? manifest.version : '0.0.0';
+  } catch {
+    packageVersionCache = '0.0.0';
+  }
+  return packageVersionCache;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -117,6 +138,14 @@ export class UsageBillingService extends TypertRemoteService {
     this.liveScheduled = false;
     this.timers = [];
     this.startedAt = Date.now();
+    this.account = null;
+    this.balanceHistory = [];
+    this.balanceStatus = 'loading';
+    this.balanceError = null;
+    this.balanceFetchedAt = 0;
+    this.balanceInflight = null;
+    this.balanceLinks = null;
+    this.balanceKickAt = 0;
   }
 
   /* ---------------------------------------------------------------- */
@@ -141,6 +170,7 @@ export class UsageBillingService extends TypertRemoteService {
       custom: domain.table('custom'),
       prefs: domain.table('prefs'),
       diag: domain.table('diag'),
+      balances: domain.table('balances'),
     };
     this.meta = normalizeMeta(domain.global.get());
     this.loadSnapshots();
@@ -148,6 +178,8 @@ export class UsageBillingService extends TypertRemoteService {
     this.loadAliases();
     this.loadCustomPrices();
     this.loadDiagnostics();
+    this.loadBalanceHistory();
+    this.resolveAccount();
     this.indexRows();
     await this.ensureBaseSnapshot();
     this.ready = true;
@@ -155,6 +187,10 @@ export class UsageBillingService extends TypertRemoteService {
     this.startTimers();
     setTimeout(() => { void this.backfill(); }, 250);
     setTimeout(() => { void this.refreshPricing(false).catch(error => warn(this.ctx, 'initial price refresh failed', error)); }, 4000);
+    if (this.account !== null) {
+      const timer = setTimeout(() => { void this.fetchBalance(false).catch(error => warn(this.ctx, 'initial balance refresh failed', error)); }, 1200);
+      this.timers.push(timer);
+    }
   }
 
   /** Detach everything this service owns. */
@@ -193,6 +229,8 @@ export class UsageBillingService extends TypertRemoteService {
       void this.refreshPricing(false).catch(error => warn(this.ctx, 'background price refresh failed', error));
     }, REFRESH_CHECK_MS);
     this.timers.push(timer);
+    // The wallet is refreshed lazily by client requests and after live usage.
+    // No idle platform polling: with no open UI there is no background timer.
   }
 
   /* ---------------------------------------------------------------- */
@@ -232,6 +270,7 @@ export class UsageBillingService extends TypertRemoteService {
       usage: event.data.usage,
     }, false);
     await this.putRows([row]);
+    this.noteUsageForBalance();
     const previous = this.tables.sessions.get(meta.sessionId);
     await this.tables.sessions.put(meta.sessionId, {
       sessionId: meta.sessionId,
@@ -688,6 +727,167 @@ export class UsageBillingService extends TypertRemoteService {
   }
 
   /* ---------------------------------------------------------------- */
+  /* Actual account balance (via the platform account service)        */
+  /* ---------------------------------------------------------------- */
+
+  /** Resolve the optional account service; absence only hides the wallet. */
+  resolveAccount() {
+    try {
+      const account = this.ctx.get('deepseekAccount');
+      this.account = account !== null && account !== undefined && typeof account.getBalance === 'function'
+        ? account
+        : null;
+    } catch (error) {
+      this.account = null;
+      warn(this.ctx, 'read account service failed', error);
+    }
+    if (this.account === null) {
+      this.balanceStatus = this.effectivePrefs().balanceEnabled === false ? 'disabled' : 'unavailable';
+    }
+  }
+
+  /** Rehydrate the observed wallet history from the domain. */
+  loadBalanceHistory() {
+    this.balanceHistory = [];
+    for (const [, row] of this.tables.balances.entries()) {
+      if (row !== null && typeof row === 'object' && typeof row.at === 'number') this.balanceHistory.push(row);
+    }
+    this.balanceHistory.sort((a, b) => a.at - b.at);
+    this.balanceFetchedAt = this.balanceHistory.at(-1)?.at ?? 0;
+    if (this.balanceHistory.length > 0) this.balanceStatus = 'ready';
+  }
+
+  /** Client metadata the account service expects for its queries. */
+  accountClientMeta() {
+    return {
+      version: packageVersion(),
+      locale: 'zh-CN',
+      timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60,
+    };
+  }
+
+  async loadBalanceLinks() {
+    try {
+      const state = await this.account.getState();
+      const links = state?.links;
+      if (links !== undefined && links !== null) {
+        this.balanceLinks = {
+          usageUrl: String(links.usageUrl ?? ''),
+          topUpUrl: String(links.topUpUrl ?? ''),
+        };
+      }
+    } catch {
+      /* links are decorative; never fail the balance */
+    }
+  }
+
+  /**
+   * Refresh the wallet observation unless the preference cache is still warm.
+   * Returns the current client-safe view in every outcome.
+   */
+  async fetchBalance(force) {
+    if (this.closed) return this.balanceSnapshot();
+    const prefs = this.effectivePrefs();
+    if (prefs.balanceEnabled === false) {
+      this.balanceStatus = 'disabled';
+      return this.balanceSnapshot();
+    }
+    if (this.account === null) {
+      this.balanceStatus = 'unavailable';
+      return this.balanceSnapshot();
+    }
+    const ttl = Math.max(10, prefs.balanceRefreshSeconds) * 1000;
+    if (force !== true && this.balanceFetchedAt > 0 && Date.now() - this.balanceFetchedAt < ttl) {
+      return this.balanceSnapshot();
+    }
+    if (this.balanceInflight !== null) return this.balanceInflight;
+    this.balanceInflight = (async () => {
+      try {
+        const details = await this.account.getBalance(this.accountClientMeta());
+        const normalized = normalizeAccountBalance(details);
+        this.balanceStatus = normalized.status;
+        this.balanceError = normalized.error;
+        if (normalized.status === 'ready') {
+          const at = Date.now();
+          const row = snapshotFromBalance(details, at);
+          if (row !== null) row.id = 'bal-' + at + '-' + String(this.balanceHistory.length);
+          if (row !== null && shouldAppendBalance(this.balanceHistory.at(-1), row, at)) {
+            this.balanceHistory.push(row);
+            const removed = pruneBalanceHistory(this.balanceHistory);
+            try {
+              await this.tables.balances.put(row.id, row);
+              for (const old of removed) await this.tables.balances.delete(old.id);
+            } catch (error) {
+              warn(this.ctx, 'persist balance snapshot failed', error);
+            }
+          }
+          this.balanceFetchedAt = at;
+        } else if (normalized.status === 'signedOut') {
+          this.balanceFetchedAt = Date.now();
+        } else {
+          this.balanceFetchedAt = 0;
+        }
+        if (this.balanceLinks === null) await this.loadBalanceLinks();
+      } catch (error) {
+        this.balanceStatus = 'failed';
+        this.balanceError = String(error?.message ?? error);
+        this.balanceFetchedAt = 0;
+        warn(this.ctx, 'account balance query failed', error);
+      } finally {
+        this.balanceInflight = null;
+      }
+      return this.balanceSnapshot();
+    })();
+    return this.balanceInflight;
+  }
+
+  /** Local estimated cost of one Beijing day / month (same scope as the UI). */
+  estimatedCny(includeSubagents, days) {
+    if (!this.ready) return null;
+    return this.scopeRows(days, includeSubagents).reduce((total, row) => total + row.costCny, 0);
+  }
+
+  /** The snapshot the Client renders; never throws. */
+  balanceSnapshot() {
+    let prefs = DEFAULT_PREFS;
+    try {
+      prefs = this.effectivePrefs();
+    } catch {
+      /* keep defaults */
+    }
+    try {
+      return balanceView(this.balanceHistory, {
+        now: Date.now(),
+        todayKey: this.todayKey(),
+        usdToCny: this.currentSnapshot()?.usdToCny ?? DEFAULT_USD_TO_CNY,
+        estimatedTodayCny: this.estimatedCny(prefs.includeSubagents, [this.todayKey()]),
+        estimatedMonthCny: this.estimatedCny(prefs.includeSubagents, this.monthDays()),
+        links: this.balanceLinks,
+        status: this.balanceStatus,
+        enabled: prefs.balanceEnabled,
+        refreshSeconds: prefs.balanceRefreshSeconds,
+        error: this.balanceError,
+        checkedAt: this.balanceFetchedAt > 0 ? this.balanceFetchedAt : null,
+      });
+    } catch {
+      return emptyBalanceView(prefs.balanceRefreshSeconds);
+    }
+  }
+
+  /** Refresh the wallet soon after a live response; debounced, never throws. */
+  noteUsageForBalance() {
+    if (!this.ready || this.closed || this.account === null) return;
+    if (this.effectivePrefs().balanceEnabled === false) return;
+    const now = Date.now();
+    if (now - this.balanceKickAt < 9000) return;
+    this.balanceKickAt = now;
+    const timer = setTimeout(() => {
+      void this.fetchBalance(true).catch(() => {});
+    }, 8000);
+    this.timers.push(timer);
+  }
+
+  /* ---------------------------------------------------------------- */
   /* Remote: aggregates                                               */
   /* ---------------------------------------------------------------- */
 
@@ -703,6 +903,9 @@ export class UsageBillingService extends TypertRemoteService {
     const today = this.todayKey();
     const currentCwd = typeof cwd === "string" && cwd !== "" ? cwd : undefined;
     const budget = await this.budgetOf(monthCny, subagents);
+    if (this.balanceFetchedAt === 0 || Date.now() - this.balanceFetchedAt > 20000) {
+      void this.fetchBalance(false).catch(error => warn(this.ctx, 'overview balance refresh failed', error));
+    }
     return {
       ready: true,
       range: kind,
@@ -722,6 +925,7 @@ export class UsageBillingService extends TypertRemoteService {
       },
       tier: this.tierStatus(),
       pricing: this.pricingMeta(),
+      balance: this.balanceSnapshot(),
       prefs: this.effectivePrefs(),
     };
   }
@@ -816,6 +1020,18 @@ export class UsageBillingService extends TypertRemoteService {
     };
   }
 
+  async balance() {
+    if (!this.ready) return emptyBalanceView(this.effectivePrefs().balanceRefreshSeconds);
+    await this.fetchBalance(false).catch(() => {});
+    return this.balanceSnapshot();
+  }
+
+  async refreshBalance(force) {
+    if (!this.ready) return emptyBalanceView(this.effectivePrefs().balanceRefreshSeconds);
+    await this.fetchBalance(force !== false).catch(() => {});
+    return this.balanceSnapshot();
+  }
+
   async prefs() {
     return { ready: this.ready, prefs: this.effectivePrefs() };
   }
@@ -828,6 +1044,8 @@ export class UsageBillingService extends TypertRemoteService {
       entryComposer: this.prefsData.entryComposer !== false,
       includeSubagents: this.prefsData.includeSubagents !== false,
       showTierCurve: this.prefsData.showTierCurve !== false,
+      balanceEnabled: this.prefsData.balanceEnabled !== false,
+      balanceRefreshSeconds: clampSeconds(this.prefsData.balanceRefreshSeconds, DEFAULT_PREFS.balanceRefreshSeconds),
       autoRefreshPricing: this.prefsData.autoRefreshPricing !== false,
       refreshHours: this.prefsData.refreshHours ?? DEFAULT_REFRESH_HOURS,
     };
@@ -843,12 +1061,19 @@ export class UsageBillingService extends TypertRemoteService {
     if (typeof input.entryComposer === 'boolean') next.entryComposer = input.entryComposer;
     if (typeof input.includeSubagents === 'boolean') next.includeSubagents = input.includeSubagents;
     if (typeof input.showTierCurve === 'boolean') next.showTierCurve = input.showTierCurve;
+    if (typeof input.balanceEnabled === 'boolean') next.balanceEnabled = input.balanceEnabled;
+    if (input.balanceRefreshSeconds !== undefined) {
+      next.balanceRefreshSeconds = clampSeconds(input.balanceRefreshSeconds, next.balanceRefreshSeconds);
+    }
     if (typeof input.autoRefreshPricing === 'boolean') next.autoRefreshPricing = input.autoRefreshPricing;
     if (typeof input.refreshHours === 'number' && Number.isFinite(input.refreshHours)) {
       next.refreshHours = Math.max(1, Math.min(168, input.refreshHours));
     }
     this.prefsData = /** @type {any} */ (next);
     await this.enqueue(() => this.tables.prefs.put('default', next));
+    if (input.balanceEnabled === true || input.balanceRefreshSeconds !== undefined) {
+      void this.fetchBalance(true).catch(() => {});
+    }
     return { ok: true, prefs: this.effectivePrefs() };
   }
 
@@ -974,6 +1199,14 @@ export class UsageBillingService extends TypertRemoteService {
       tier: this.tierStatus(),
       diag: latestDiag,
       schemaRuntime: domainSchemaRuntime(),
+      balance: {
+        status: this.balanceStatus,
+        fetchedAt: this.balanceFetchedAt,
+        samples: this.balanceHistory.length,
+        account: this.account !== null,
+        links: this.balanceLinks !== null,
+        error: this.balanceError,
+      },
       version: 1,
     };
   }
@@ -1009,6 +1242,7 @@ export class UsageBillingService extends TypertRemoteService {
         snapshotId: 'fallback', usdToCny: DEFAULT_USD_TO_CNY, usdToCnySource: 'default',
         live: false, entries: Object.keys(BUILTIN_CATALOG).length, customKeys: [],
       },
+      balance: emptyBalanceView(this.effectivePrefs().balanceRefreshSeconds),
       prefs: this.effectivePrefs(),
     };
   }
@@ -1026,6 +1260,12 @@ function normalizeMeta(value) {
   const meta = isPlainObject(value) ? { ...value } : {};
   if (!isPlainObject(meta.budgetNotified)) meta.budgetNotified = {};
   return meta;
+}
+
+function clampSeconds(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(10, Math.min(600, Math.round(n)));
 }
 
 function normalizeRange(kind) {
