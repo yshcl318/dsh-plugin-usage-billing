@@ -42,7 +42,7 @@
           "source": {
             "type": "git",
             "url": "https://github.com/yshcl318/dsh-plugin-usage-billing",
-            "commit": "941357c6f20398061e89cba614e18aae751bd1e1",
+            "commit": "0c419e9e564192270fcee20a1a216d66da09dc69",
             "path": "bundle/dsh-plugin-usage-billing"
           },
           "engines": {
