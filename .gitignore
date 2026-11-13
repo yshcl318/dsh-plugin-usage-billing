@@ -1,0 +1,13 @@
+# Workspace-only artifacts; the published bundle keeps its own `files` list.
+node_modules/
+dist/
+ref/
+verify/
+.playwright-mcp/
+mcp-browser/
+
+# Local credentials helper used only while verifying the running GUI.
+tools/verify-cookie.json
+
+# Packed archives (regenerate with `node tools/packBundle.mjs`).
+*.tgz

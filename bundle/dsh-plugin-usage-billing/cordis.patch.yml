@@ -1,0 +1,6 @@
+# Usage billing bundle patch.
+# Installs the Host half as one Loader row. The Client half is discovered from
+# this package's `dsh.client` manifest entry (the `./client` export).
+- insert:
+    - id: usage-billing
+      name: '@yshcl318/dsh-plugin-usage-billing'

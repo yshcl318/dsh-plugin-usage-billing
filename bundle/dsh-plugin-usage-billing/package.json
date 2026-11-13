@@ -1,0 +1,56 @@
+{
+  "name": "@yshcl318/dsh-plugin-usage-billing",
+  "version": "1.3.1",
+  "private": true,
+  "description": "Usage billing for DeepSeek Harness: aggregates real token usage from local session logs, locks each cost at the price in effect when the event happened, and shows budget progress in the sidebar, under the composer and in Settings.",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "usage",
+    "billing",
+    "tokens",
+    "cost"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "host",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "docs",
+    "icon.svg",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-typert-protocol": ">=0.2.2-rc.2 <0.3.0-0",
+    "@deepseek-ai/dsh-storage-domain": ">=0.2.2-rc.2 <0.3.0-0"
+  },
+  "engines": {
+    "dsh": ">=0.2.2-rc.2 <0.3.0-0"
+  }
+}

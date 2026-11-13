@@ -1,0 +1,21 @@
+{
+  "name": "dsh-usage-billing-workspace",
+  "private": true,
+  "description": "Workspace for the usage-billing DSH bundle: bundle sources, tests and verification evidence.",
+  "scripts": {
+    "test": "node tests/host.test.mjs && node tests/client.test.mjs && node tests/ui.test.mjs",
+    "test:host": "node tests/host.test.mjs",
+    "test:client": "node tests/client.test.mjs",
+    "pack": "node tools/packBundle.mjs",
+    "typecheck": "node node_modules/typescript/bin/tsc -p tsconfig.json",
+    "check": "node node_modules/typescript/bin/tsc -p tsconfig.json && node tests/host.test.mjs && node tests/client.test.mjs && node tests/ui.test.mjs",
+    "test:ui": "node tests/ui.test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "jsdom": "^25.0.1",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "typescript": "5.7.2"
+  }
+}

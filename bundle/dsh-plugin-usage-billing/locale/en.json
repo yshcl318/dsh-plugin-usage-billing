@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Usage billing",
+    "description": "Aggregates real token usage from local session logs, locks each cost at the price in effect when the event happened, and shows monthly budget progress in the sidebar, under the composer and in Settings → 计费.",
+    "detail": "docs/DETAIL.md"
+  }
+}
