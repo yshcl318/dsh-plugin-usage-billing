@@ -71,6 +71,14 @@ idle polling: with no open UI the plugin does not call the platform. Hidden
 tabs back off to 5 minutes. Signed-out or unavailable states are labeled
 instead of showing a fake zero.
 
+### Scheduling and multiple clients
+
+Each open Client half schedules its own wallet requests with the configured
+interval; the Host keeps a single cached observation guarded by its TTL and an
+in-flight request, so multiple tabs/panels share one platform query. A hidden
+tab backs off to five minutes, and no open UI means no wallet polling. Details
+are in [docs/DETAIL.md](docs/DETAIL.md).
+
 ## Data, install and privacy
 
 - The ledger is stored through the platform's `storage-domain` facility

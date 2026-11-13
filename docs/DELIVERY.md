@@ -218,6 +218,18 @@ node tests/client.test.mjs    → 5 surfaces, 5 degraded surfaces, 17 remote met
 
 回归：`tsc` 0 错误、host 19/19、client 19 方法、jsdom UI 测试通过；浏览器实测无 `[usage-billing]` 错误。
 
+
+---
+
+## 十二、回退兼容性与多客户端调度（复核补充）
+
+| 项 | 处理 |
+|---|---|
+| 回退兼容测试 | ✅ 新增 `tests/domain-compat.test.mjs`：用**真实** `@deepseek-ai/dsh-storage-domain` 的 `DomainFacility` + 内存 kv unit，构造「1.3.x 的 7 表 schema」打开含 `balances` 记录的 v2 域，断言：旧读取器成功打开、只加载 7 张表、`table('balances')` 抛「declares no table」、账本记录可读、balances 文档未被改动；再用 1.4.0 的 8 表 spec 打开同一快照，能校验并读取钱包记录；损坏的钱包记录按 `backup-and-skip` 备份后跳过。`pnpm test`/`pnpm check` 已纳入该套件。 |
+| 多客户端调度说明 | ✅ 已写入 bundle `docs/DETAIL.md`（及 README 摘要）：每个打开的 Client 各自按 `balanceRefreshSeconds` 调度；Host 用一个缓存观测 + TTL + 单飞请求去重，所以多标签/多面板共享同一次平台查询；本地用量后额外强制一次，隐藏标签页退避 5 分钟，无 UI 时不轮询。 |
+
+测试结果：`pnpm test` 四套件全部通过（host 19/19、client 19 方法、jsdom UI、真实 storage-domain 兼容测试）；`tsc` 0 错误。
+
 ## 六、剩余限制（明确保留）
 
 1. 整应用重启后的“卸载→重启”未再单独跑（会中断当前会话）；卸载 live 路径已验证，卸载逻辑自 v1.0 未变。

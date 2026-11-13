@@ -53,6 +53,18 @@ spend, and fewer than two samples for the day reports unknown (`—`). The refre
 interval is a preference (default 30 s) and drives a client-side scheduler;
 manual refresh bypasses it and a hidden tab backs off to 5 minutes.
 
+### Scheduling and multiple clients
+
+Every open Client half schedules its own wallet requests using that profile's
+`balanceRefreshSeconds`; the Host keeps one cached observation and its TTL
+returns the snapshot to every caller inside the window, so several tabs, a
+panel and a popover share one platform query instead of multiplying requests.
+Concurrent callers are also coalesced by a single in-flight request. A live
+model response adds one forced check a few seconds later, and a hidden tab
+backs off to five minutes; with no open UI there is no wallet polling at all.
+Therefore a multi-client setup sees the same snapshot and cannot amplify
+account-service traffic beyond one query per TTL window.
+
 Adding the `balances` table did not bump the domain version: per-record readers
 only load the tables declared by their own spec, so a 1.3.x reader ignores the
 extra wallet documents while the version-2 ledger keeps working. Bumping would
